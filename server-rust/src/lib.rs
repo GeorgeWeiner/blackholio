@@ -1,3 +1,9 @@
+
+
+pub mod math;
+
+use math::DbVector2;
+
 use spacetimedb::{
     rand::Rng, Identity, ReducerContext, ScheduleAt, SpacetimeType, Table, Timestamp,
 };
@@ -18,13 +24,6 @@ pub struct Config {
     #[primary_key]
     pub id: u32,
     pub world_size: u64,
-}
-
-// This allows us to store 2D points in tables.
-#[derive(SpacetimeType, Clone, Debug)]
-pub struct DbVector2 {
-    pub x: f32,
-    pub y: f32,
 }
 
 #[spacetimedb::table(name = entity, public)]
@@ -124,6 +123,12 @@ pub fn init(ctx: &ReducerContext) -> Result<(), String> {
         scheduled_id: 0,
         scheduled_at: ScheduleAt::Interval(Duration::from_millis(500).into()),
     })?;
+    ctx.db
+        .move_all_players_timer()
+        .try_insert(MoveAllPlayersTimer {
+            scheduled_id: 0,
+            scheduled_at: ScheduleAt::Interval(Duration::from_millis(50).into()),
+        })?;
     Ok(())
 }
 
@@ -228,4 +233,112 @@ fn spawn_circle_at(
         last_split_time: timestamp,
     })?;
     Ok(entity)
+}
+
+#[spacetimedb::reducer]
+pub fn update_player_input(ctx: &ReducerContext, direction: DbVector2) -> Result<(), String> {
+    let player = ctx
+        .db
+        .player()
+        .identity()
+        .find(&ctx.sender)
+        .ok_or("Player not found")?;
+    for mut circle in ctx.db.circle().player_id().filter(&player.player_id) {
+        circle.direction = direction.normalized();
+        circle.speed = direction.magnitude().clamp(0.0, 1.0);
+        ctx.db.circle().entity_id().update(circle);
+    }
+    Ok(())
+}
+
+#[spacetimedb::table(name = move_all_players_timer, scheduled(move_all_players))]
+pub struct MoveAllPlayersTimer {
+    #[primary_key]
+    #[auto_inc]
+    scheduled_id: u64,
+    scheduled_at: spacetimedb::ScheduleAt,
+}
+
+const START_PLAYER_SPEED: u32 = 10;
+
+fn mass_to_max_move_speed(mass: u32) -> f32 {
+    2.0 * START_PLAYER_SPEED as f32 / (1.0 + (mass as f32 / START_PLAYER_MASS as f32).sqrt())
+}
+
+const MINIMUM_SAFE_MASS_RATIO: f32 = 0.85;
+
+fn is_overlapping(a: &Entity, b: &Entity) -> bool {
+    let dx = a.position.x - b.position.x;
+    let dy = a.position.y - b.position.y;
+    let distance_sq = dx * dx + dy * dy;
+
+    let radius_a = mass_to_radius(a.mass);
+    let radius_b = mass_to_radius(b.mass);
+
+    // If the distance between the two circle centers is less than the
+    // maximum radius, then the center of the smaller circle is inside
+    // the larger circle. This gives some leeway for the circles to overlap
+    // before being eaten.
+    let max_radius = f32::max(radius_a, radius_b);
+    distance_sq <= max_radius * max_radius
+}
+
+#[spacetimedb::reducer]
+pub fn move_all_players(ctx: &ReducerContext, _timer: MoveAllPlayersTimer) -> Result<(), String> {
+    let world_size = ctx
+        .db
+        .config()
+        .id()
+        .find(0)
+        .ok_or("Config not found")?
+        .world_size;
+
+    // Handle player input
+    for circle in ctx.db.circle().iter() {
+        let circle_entity = ctx.db.entity().entity_id().find(&circle.entity_id);
+        if !circle_entity.is_some() {
+            // This can happen if a circle is eaten by another circle
+            continue;
+        }
+        let mut circle_entity = circle_entity.unwrap();
+        let circle_radius = mass_to_radius(circle_entity.mass);
+        let direction = circle.direction * circle.speed;
+        let new_pos =
+            circle_entity.position + direction * mass_to_max_move_speed(circle_entity.mass);
+        let min = circle_radius;
+        let max = world_size as f32 - circle_radius;
+        circle_entity.position.x = new_pos.x.clamp(min, max);
+        circle_entity.position.y = new_pos.y.clamp(min, max);
+
+        // Check collisions
+        for entity in ctx.db.entity().iter() {
+            if entity.entity_id == circle_entity.entity_id {
+                continue;
+            }
+            if is_overlapping(&circle_entity, &entity) {
+                // Check to see if we're overlapping with food
+                if ctx.db.food().entity_id().find(&entity.entity_id).is_some() {
+                    ctx.db.entity().entity_id().delete(&entity.entity_id);
+                    ctx.db.food().entity_id().delete(&entity.entity_id);
+                    circle_entity.mass += entity.mass;
+                }
+
+                // Check to see if we're overlapping with another circle owned by another player
+                let other_circle = ctx.db.circle().entity_id().find(&entity.entity_id);
+                if let Some(other_circle) = other_circle {
+                    if other_circle.player_id != circle.player_id {
+                        let mass_ratio = entity.mass as f32 / circle_entity.mass as f32;
+                        if mass_ratio < MINIMUM_SAFE_MASS_RATIO {
+                            ctx.db.entity().entity_id().delete(&entity.entity_id);
+                            ctx.db.circle().entity_id().delete(&entity.entity_id);
+                            circle_entity.mass += entity.mass;
+                        }
+                    }
+                }
+            }
+        }
+        ctx.db.entity().entity_id().update(circle_entity);
+    }
+
+    Ok(())
 }
