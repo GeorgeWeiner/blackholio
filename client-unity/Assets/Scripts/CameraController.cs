@@ -5,10 +5,11 @@ using UnityEngine;
 public class CameraController : MonoBehaviour
 {
     public static float WorldSize = 0.0f;
+    public static float DistanceZ = -30.0f;
 
     private void LateUpdate()
     {
-        var arenaCenterTransform = new Vector3(WorldSize / 2, WorldSize / 2, -10.0f);
+        var arenaCenterTransform = new Vector3(WorldSize / 2, WorldSize / 2, DistanceZ);
         if (PlayerController.Local == null || !GameManager.IsConnected())
         {
             // Set the camera to be in middle of the arena if we are not connected or 
@@ -26,7 +27,7 @@ public class CameraController : MonoBehaviour
             {
                 x = centerOfMass.Value.x,
                 y = centerOfMass.Value.y,
-                z = transform.position.z
+                z = DistanceZ
             };
         } else {
             transform.position = arenaCenterTransform;
@@ -39,7 +40,7 @@ public class CameraController : MonoBehaviour
     private float CalculateCameraSize(PlayerController player)
     {
         return 50f + //Base size
-               Mathf.Min(50, player.TotalMass() / 5) + //Increase camera size with mass
+               Mathf.Min(50, player.TotalMass() / 2) + //Increase camera size with mass
                Mathf.Min(player.NumberOfOwnedCircles - 1, 1) * 30; //Zoom out when player splits
     }
 }

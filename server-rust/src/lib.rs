@@ -5,7 +5,7 @@ pub mod math;
 use math::DbVector2;
 
 use spacetimedb::{
-    rand::Rng, Identity, ReducerContext, ScheduleAt, SpacetimeType, Table, Timestamp,
+    rand::Rng, Identity, ReducerContext, ScheduleAt, Table, Timestamp,
 };
 use std::time::Duration;
 

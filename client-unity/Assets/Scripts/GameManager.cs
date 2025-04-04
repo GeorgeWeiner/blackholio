@@ -6,8 +6,8 @@ using UnityEngine;
 
 public class GameManager : MonoBehaviour
 {
-    const string SERVER_URL = "http://127.0.0.1:3000";
-    const string MODULE_NAME = "blackholio";
+    const string SERVER_URL = "https://maincloud.spacetimedb.com";
+    const string MODULE_NAME = "jorbits";
 
     public static event Action OnConnected;
     public static event Action OnSubscriptionApplied;
@@ -26,6 +26,9 @@ public class GameManager : MonoBehaviour
     {
         Instance = this;
         Application.targetFrameRate = 60;
+        
+        // Clear cached connection data to ensure proper connection
+        PlayerPrefs.DeleteAll();
 
         // In order to build a connection to SpacetimeDB we need to register
         // our callbacks and specify a SpacetimeDB server URI and module name.
